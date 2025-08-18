@@ -5,6 +5,9 @@ description = ""
 authors = ["SN <6432132+samnoyes@users.noreply.github.com>"]
 readme = "README.md"
 
+[[tool.poetry.packages]]
+include = "backend"
+
 [tool.poetry.dependencies]
 python = "^3.10"
 langchain = "^0.1.12"
