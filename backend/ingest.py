@@ -99,27 +99,19 @@ def load_api_docs():
 
 # --- Main ingestion function ---
 def ingest_docs():
-    # --- Load environment variables safely ---
-    WEAVIATE_URL = os.environ.get("WEAVIATE_URL")
-    WEAVIATE_API_KEY = os.environ.get("WEAVIATE_API_KEY")
-    RECORD_MANAGER_DB_URL = os.environ.get("RECORD_MANAGER_DB_URL")
+    WEAVIATE_URL = os.environ["WEAVIATE_URL"]
+    WEAVIATE_API_KEY = os.environ["WEAVIATE_API_KEY"]
 
-    if not WEAVIATE_URL or not WEAVIATE_API_KEY or not RECORD_MANAGER_DB_URL:
-        raise ValueError(
-            "Missing required environment variables: WEAVIATE_URL, WEAVIATE_API_KEY, or RECORD_MANAGER_DB_URL"
-        )
+    from backend.db import engine  # use the NullPool engine
+    from langchain.indexes import SQLRecordManager, index
 
-    # --- Setup text splitter and embeddings ---
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=200)
     embedding = get_embeddings_model()
 
-    # --- Weaviate client & vectorstore ---
     client = weaviate.Client(
         url=WEAVIATE_URL,
         auth_client_secret=weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY),
-        additional_headers={"X-OpenAI-Project": "LangChain-Ingest"},  # optional safe header
     )
-
     vectorstore = Weaviate(
         client=client,
         index_name=WEAVIATE_DOCS_INDEX_NAME,
@@ -129,51 +121,55 @@ def ingest_docs():
         attributes=["source", "title"],
     )
 
-    # --- SQL record manager with NullPool to avoid EOF issues ---
+    # Use engine instead of db_url to avoid SSL EOF errors
     record_manager = SQLRecordManager(
-        f"weaviate/{WEAVIATE_DOCS_INDEX_NAME}", db_url=RECORD_MANAGER_DB_URL
+        f"weaviate/{WEAVIATE_DOCS_INDEX_NAME}",
+        db_url=None,
+        engine=engine
     )
     record_manager.create_schema()
 
-    # --- Load all docs ---
+    # Retry wrapper for get_time
+    def safe_get_time(record_manager, retries=3, delay=1):
+        import time
+        from sqlalchemy.exc import OperationalError
+        for attempt in range(retries):
+            try:
+                return record_manager.get_time()
+            except OperationalError:
+                time.sleep(delay)
+        raise RuntimeError("Failed to get DB time after retries")
+
+    index_start_dt = safe_get_time(record_manager)
+
+    # Load docs
     docs_from_documentation = load_langchain_docs()
     logger.info(f"Loaded {len(docs_from_documentation)} docs from documentation")
-
     docs_from_api = load_api_docs()
     logger.info(f"Loaded {len(docs_from_api)} docs from API")
-
     docs_from_langsmith = load_langsmith_docs()
     logger.info(f"Loaded {len(docs_from_langsmith)} docs from Langsmith")
 
-    # --- Split & clean documents ---
     docs_transformed = text_splitter.split_documents(
         docs_from_documentation + docs_from_api + docs_from_langsmith
     )
     docs_transformed = [doc for doc in docs_transformed if len(doc.page_content) > 10]
 
-    # Ensure metadata safety
     for doc in docs_transformed:
-        doc.metadata.setdefault("source", "")
-        doc.metadata.setdefault("title", "")
+        if "source" not in doc.metadata:
+            doc.metadata["source"] = ""
+        if "title" not in doc.metadata:
+            doc.metadata["title"] = ""
 
-    # --- Index into Weaviate ---
     indexing_stats = index(
         docs_transformed,
         record_manager,
         vectorstore,
-        cleanup="full",  # can use "incremental" for faster runs
+        cleanup="full",
         source_id_key="source",
         force_update=(os.environ.get("FORCE_UPDATE") or "false").lower() == "true",
     )
+
     logger.info(f"Indexing stats: {indexing_stats}")
-
-    # --- Optional: check vector count ---
-    try:
-        num_vecs = client.query.aggregate(WEAVIATE_DOCS_INDEX_NAME).with_meta_count().do()
-        logger.info(f"LangChain now has this many vectors: {num_vecs}")
-    except Exception as e:
-        logger.warning(f"Could not fetch vector count: {e}")
-
-
-if __name__ == "__main__":
-    ingest_docs()
+    num_vecs = client.query.aggregate(WEAVIATE_DOCS_INDEX_NAME).with_meta_count().do()
+    logger.info(f"LangChain now has this many vectors: {num_vecs}")
