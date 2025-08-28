@@ -119,6 +119,31 @@ app.add_middleware(
 
 WEAVIATE_URL = os.environ["WEAVIATE_URL"]
 WEAVIATE_API_KEY = os.environ["WEAVIATE_API_KEY"]
+_weaviate_client = None  # global, uninitialized
+
+def get_weaviate_client(retries: int = 5, delay: int = 5):
+    """Lazy init of Weaviate client with retries."""
+    import time
+    global _weaviate_client
+    if _weaviate_client is not None:
+        return _weaviate_client
+
+    for attempt in range(1, retries + 1):
+        try:
+            _weaviate_client = weaviate.Client(
+                url=WEAVIATE_URL,
+                auth_client_secret=weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY),
+                startup_period=30,  # allow longer startup
+            )
+            print("✅ Connected to Weaviate")
+            return _weaviate_client
+        except Exception as e:
+            print(f"⚠️ Weaviate connection failed (attempt {attempt}/{retries}): {e}")
+            if attempt < retries:
+                time.sleep(delay)
+            else:
+                print("❌ Failed to connect to Weaviate after retries")
+                raise
 
 
 class ChatRequest(BaseModel):
@@ -127,19 +152,16 @@ class ChatRequest(BaseModel):
 
 
 def get_retriever() -> BaseRetriever:
-    weaviate_client = weaviate.Client(
-        url=WEAVIATE_URL,
-        auth_client_secret=weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY),
-    )
-    weaviate_client = Weaviate(
-        client=weaviate_client,
+    client = get_weaviate_client()
+    weaviate_store = Weaviate(
+        client=client,
         index_name=WEAVIATE_DOCS_INDEX_NAME,
         text_key="text",
         embedding=get_embeddings_model(),
         by_text=False,
         attributes=["source", "title"],
     )
-    return weaviate_client.as_retriever(search_kwargs=dict(k=6))
+    return weaviate_store.as_retriever(search_kwargs=dict(k=6))
 
 
 def create_retriever_chain(
@@ -274,5 +296,15 @@ llm = gpt_3_5.configurable_alternatives(
     [gpt_3_5, claude_3_haiku, fireworks_mixtral, gemini_pro, cohere_command]
 )
 
-retriever = get_retriever()
-answer_chain = create_chain(llm, retriever)
+retriever = None
+answer_chain = None
+
+@app.on_event("startup")
+async def startup_event():
+    global retriever, answer_chain
+    try:
+        retriever = get_retriever()
+        answer_chain = create_chain(llm, retriever)
+        print("✅ Retriever and answer chain initialized")
+    except Exception as e:
+        print(f"⚠️ Startup could not initialize Weaviate: {e}")
