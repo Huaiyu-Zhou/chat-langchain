@@ -17,8 +17,8 @@ RUN poetry install --no-interaction --no-ansi --no-root
 # Copy application source code
 COPY ./backend /app/backend
 
-# (Optional) If you want to install your package inside container, re-run poetry install without --no-root
-# RUN poetry install --no-interaction --no-ansi
+# Expose port for Cloud Run
+EXPOSE 8000
 
-# Start app
-CMD exec uvicorn --app-dir=backend main:app --host 0.0.0.0 --port ${PORT:-8080}
+# Start app with Cloud Run's PORT
+CMD exec uvicorn --app-dir=backend main:app --host 0.0.0.0 --port $PORT
