@@ -24,13 +24,6 @@ app.add_middleware(
 )
 
 
-add_routes(
-    app,
-    answer_chain,
-    path="/chat",
-    input_type=ChatRequest,
-    config_keys=["metadata", "configurable", "tags"],
-)
 
 
 class SendFeedbackBody(BaseModel):

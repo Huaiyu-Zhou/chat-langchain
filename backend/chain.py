@@ -310,5 +310,15 @@ async def startup_event():
         retriever = get_retriever()
         answer_chain = create_chain(llm, retriever)
         print("✅ Retriever and answer chain initialized")
+
+        # Add /chat route only after answer_chain is ready
+        add_routes(
+            app,
+            answer_chain,
+            path="/chat",
+            input_type=ChatRequest,
+            config_keys=["metadata", "configurable", "tags"],
+        )
+        print("✅ /chat route registered")
     except Exception as e:
-        print(f"⚠️ Startup could not initialize Weaviate: {e}")
+        print(f"⚠️ Startup could not initialize Weaviate or register route: {e}")
