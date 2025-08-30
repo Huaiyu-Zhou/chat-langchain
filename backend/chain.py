@@ -117,8 +117,11 @@ app.add_middleware(
 )
 
 
-WEAVIATE_URL = os.environ["WEAVIATE_URL"]
-WEAVIATE_API_KEY = os.environ["WEAVIATE_API_KEY"]
+WEAVIATE_URL = os.environ.get("WEAVIATE_URL")
+WEAVIATE_API_KEY = os.environ.get("WEAVIATE_API_KEY")
+
+if not WEAVIATE_URL or not WEAVIATE_API_KEY:
+    raise RuntimeError("WEAVIATE_URL and WEAVIATE_API_KEY must be set in environment variables")
 _weaviate_client = None  # global, uninitialized
 
 def get_weaviate_client(retries: int = 5, delay: int = 5):
@@ -297,7 +300,8 @@ llm = gpt_3_5.configurable_alternatives(
 )
 
 retriever = None
-answer_chain = None
+from langchain_core.runnables import RunnablePassthrough
+answer_chain = RunnablePassthrough()
 
 @app.on_event("startup")
 async def startup_event():
