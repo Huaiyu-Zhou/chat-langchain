@@ -299,8 +299,7 @@ llm = gpt_3_5.configurable_alternatives(
 retriever = None
 answer_chain = None
 
-@app.on_event("startup")
-async def startup_event():
+@app.on_event("startup").20*async def startup_event():
     global retriever, answer_chain
     try:
         retriever = get_retriever()
